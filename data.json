@@ -1,0 +1,37 @@
+{
+  "users": {
+    "test123": {
+      "id": "test123",
+      "name": "Тест",
+      "phone": "+7999",
+      "pairCode": "L9JUBQ",
+      "coupleId": "couple_test123_1765118966464",
+      "xp": 0,
+      "level": 1,
+      "coins": 100,
+      "created": "2025-12-07T14:49:26.464Z"
+    }
+  },
+  "couples": {
+    "couple_test123_1765118966464": {
+      "id": "couple_test123_1765118966464",
+      "user1": "test123",
+      "user2": null,
+      "created": "2025-12-07T14:49:26.464Z"
+    }
+  },
+  "pairCodes": {
+    "L9JUBQ": "test123"
+  },
+  "wishes": {},
+  "stats": {},
+  "challenges": {},
+  "diary": {},
+  "mood": {},
+  "chat": {},
+  "secrets": {},
+  "gifts": {},
+  "tests": {},
+  "calendar": {},
+  "confessions": {}
+}

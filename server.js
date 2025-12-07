@@ -221,14 +221,17 @@ app.get('/api/couple/:coupleId/diary', (req, res) => {
 });
 
 app.post('/api/couple/:coupleId/diary', (req, res) => {
-  const { odTitle, odContent, odMood, odAuthor } = req.body;
+  const title = req.body.title || req.body.odTitle;
+  const content = req.body.content || req.body.odContent;
+  const mood = req.body.mood || req.body.odMood;
+  const author = req.body.author || req.body.odAuthor;
   if (!data.diary[req.params.coupleId]) data.diary[req.params.coupleId] = [];
   data.diary[req.params.coupleId].unshift({
     id: Date.now(),
-    title: odTitle,
-    content: odContent,
-    mood: odMood,
-    author: odAuthor,
+    title,
+    content,
+    mood,
+    author,
     date: new Date().toISOString()
   });
   saveData();
@@ -248,7 +251,9 @@ app.get('/api/couple/:coupleId/mood', (req, res) => {
 });
 
 app.post('/api/couple/:coupleId/mood', (req, res) => {
-  const { odUserId, odMood, odNote } = req.body;
+  const odUserId = req.body.userId || req.body.odUserId;
+  const mood = req.body.mood || req.body.odMood;
+  const note = req.body.note || req.body.odNote;
   if (!data.mood[req.params.coupleId]) data.mood[req.params.coupleId] = [];
   // Remove today's mood from same user
   const today = new Date().toISOString().split('T')[0];
@@ -256,8 +261,8 @@ app.post('/api/couple/:coupleId/mood', (req, res) => {
   data.mood[req.params.coupleId].unshift({
     id: Date.now(),
     odUserId,
-    mood: odMood,
-    note: odNote,
+    mood,
+    note,
     date: new Date().toISOString()
   });
   saveData();
@@ -270,12 +275,14 @@ app.get('/api/couple/:coupleId/chat', (req, res) => {
 });
 
 app.post('/api/couple/:coupleId/chat', (req, res) => {
-  const { odFrom, odMessage } = req.body;
+  const from = req.body.from || req.body.odFrom;
+  const message = req.body.message || req.body.odMessage;
+  if (!from || !message) return res.json({ success: false, error: 'Missing from or message' });
   if (!data.chat[req.params.coupleId]) data.chat[req.params.coupleId] = [];
   data.chat[req.params.coupleId].push({
     id: Date.now(),
-    from: odFrom,
-    message: odMessage,
+    from,
+    message,
     time: new Date().toISOString()
   });
   // Keep last 100 messages

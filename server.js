@@ -1,292 +1,683 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
-const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const DATA_FILE = process.env.DATA_PATH || './data.json';
-const PORT = process.env.PORT || 3456;
-const BOT_TOKEN = process.env.BOT_TOKEN || '';
+const DATA_FILE = './data.json';
+const PORT = process.env.PORT || 3000;
 
-let data = {
-  users: {},
-  couples: {},
-  progress: {},
-  calendar: {},
-  pregnancy: {},
-  cycles: {},
-  pairCodes: {}
-};
-
-if (fs.existsSync(DATA_FILE)) {
-  try { data = JSON.parse(fs.readFileSync(DATA_FILE)); } catch(e) {}
-}
-
-function saveData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
+let data = { users: {}, couples: {}, progress: {}, calendar: {}, pregnancy: {}, cycles: {}, pairCodes: {}, wishes: {}, achievements: {}, stats: {}, challenges: {}, diary: {}, mood: {}, chat: {}, streaks: {}, secrets: {}, gifts: {}, premium: {} };
+if (fs.existsSync(DATA_FILE)) { try { data = JSON.parse(fs.readFileSync(DATA_FILE)); } catch(e) {} }
+function saveData() { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2)); }
 function generatePairCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code;
-  do {
-    code = '';
-    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  } while (data.pairCodes[code]);
+  let code; do { code = ''; for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)]; } while (data.pairCodes[code]);
   return code;
 }
 
-// Check if user exists
-app.get('/api/user/:telegramId/status', (req, res) => {
-  const id = req.params.telegramId;
-  const user = data.users[id];
-  if (!user) {
-    return res.json({ registered: false });
-  }
+// === AUTH ===
+app.get('/api/user/:id/status', (req, res) => {
+  const user = data.users[req.params.id];
+  if (!user) return res.json({ registered: false });
   const couple = data.couples[user.coupleId];
-  res.json({
-    registered: true,
-    user: user,
-    hasPartner: !!couple?.partner2,
-    pairCode: user.pairCode,
-    partner: couple?.partner2 ? data.users[couple.partner2 === id ? couple.partner1 : couple.partner2] : null
-  });
+  const partnerId = couple?.partner2 === req.params.id ? couple?.partner1 : couple?.partner2;
+  res.json({ registered: true, user, hasPartner: !!couple?.partner2, pairCode: user.pairCode, partner: partnerId ? data.users[partnerId] : null });
 });
 
-// Register new user
 app.post('/api/register', (req, res) => {
   const { telegramId, name, username } = req.body;
-  
-  if (data.users[telegramId]) {
-    return res.json({ success: false, error: 'Already registered' });
-  }
-  
+  if (data.users[telegramId]) return res.json({ success: false, error: 'Already registered' });
   const pairCode = generatePairCode();
   const coupleId = 'couple_' + telegramId;
-  
-  data.users[telegramId] = {
-    id: telegramId,
-    name: name,
-    username: username,
-    pairCode: pairCode,
-    coupleId: coupleId,
-    created: new Date()
-  };
-  
-  data.couples[coupleId] = {
-    id: coupleId,
-    partner1: telegramId,
-    partner2: null,
-    created: new Date()
-  };
-  
+  data.users[telegramId] = { id: telegramId, name, username, pairCode, coupleId, created: new Date().toISOString(), xp: 0, level: 1, coins: 100 };
+  data.couples[coupleId] = { id: coupleId, partner1: telegramId, partner2: null, created: new Date().toISOString() };
   data.pairCodes[pairCode] = telegramId;
   data.progress[telegramId] = {};
   data.calendar[coupleId] = [];
-  data.pregnancy[coupleId] = null;
-  data.cycles[coupleId] = [];
-  
+  data.cycles[coupleId] = { periods: [], cycleLength: 28, periodLength: 5 };
+  data.wishes[coupleId] = { partner1: [], partner2: [] };
+  data.achievements[telegramId] = [];
+  data.stats[coupleId] = { intimate: [], positions: {}, tests: {} };
+  data.challenges[coupleId] = [];
+  data.diary[coupleId] = [];
+  data.mood[coupleId] = [];
+  data.chat[coupleId] = [];
   saveData();
-  
-  res.json({
-    success: true,
-    user: data.users[telegramId],
-    pairCode: pairCode
-  });
+  res.json({ success: true, user: data.users[telegramId], pairCode });
 });
 
-// Join partner by code
 app.post('/api/join', (req, res) => {
   const { telegramId, name, username, pairCode } = req.body;
-  
-  if (data.users[telegramId]) {
-    return res.json({ success: false, error: 'Already registered' });
-  }
-  
-  const partnerId = data.pairCodes[pairCode.toUpperCase()];
-  if (!partnerId) {
-    return res.json({ success: false, error: 'Invalid code' });
-  }
-  
+  if (data.users[telegramId]) return res.json({ success: false, error: 'Already registered' });
+  const partnerId = data.pairCodes[pairCode?.toUpperCase()];
+  if (!partnerId) return res.json({ success: false, error: 'Invalid code' });
   const partner = data.users[partnerId];
-  if (!partner) {
-    return res.json({ success: false, error: 'Partner not found' });
-  }
-  
+  if (!partner) return res.json({ success: false, error: 'Partner not found' });
   const couple = data.couples[partner.coupleId];
-  if (couple.partner2) {
-    return res.json({ success: false, error: 'Code already used' });
-  }
-  
-  data.users[telegramId] = {
-    id: telegramId,
-    name: name,
-    username: username,
-    pairCode: null,
-    coupleId: partner.coupleId,
-    created: new Date()
-  };
-  
+  if (couple.partner2) return res.json({ success: false, error: 'Code already used' });
+  data.users[telegramId] = { id: telegramId, name, username, pairCode: null, coupleId: partner.coupleId, created: new Date().toISOString(), xp: 0, level: 1, coins: 100 };
   couple.partner2 = telegramId;
-  couple.linkedAt = new Date();
-  
+  couple.linkedAt = new Date().toISOString();
   data.progress[telegramId] = {};
-  
+  data.achievements[telegramId] = [];
+  // Init wishes for partner2
+  if (data.wishes[partner.coupleId]) data.wishes[partner.coupleId].partner2 = [];
   saveData();
-  
-  res.json({
-    success: true,
-    user: data.users[telegramId],
-    partner: partner,
-    coupleId: partner.coupleId
-  });
+  checkAchievement(partnerId, 'first_partner');
+  checkAchievement(telegramId, 'first_partner');
+  res.json({ success: true, user: data.users[telegramId], partner, coupleId: partner.coupleId });
 });
 
-// Get user data
-app.get('/api/user/:telegramId', (req, res) => {
-  const id = req.params.telegramId;
-  const user = data.users[id];
+app.get('/api/user/:id', (req, res) => {
+  const user = data.users[req.params.id];
   if (!user) return res.json({ user: null });
-  
   const couple = data.couples[user.coupleId];
-  const partnerId = couple?.partner2 === id ? couple?.partner1 : couple?.partner2;
-  
   res.json({
-    user: user,
-    partner: partnerId ? data.users[partnerId] : null,
-    progress: data.progress[id] || {},
-    partnerProgress: partnerId ? data.progress[partnerId] || {} : {},
+    user, progress: data.progress[req.params.id] || {},
     calendar: data.calendar[user.coupleId] || [],
     pregnancy: data.pregnancy[user.coupleId],
-    cycles: data.cycles[user.coupleId] || []
+    cycles: data.cycles[user.coupleId] || { periods: [], cycleLength: 28, periodLength: 5 },
+    achievements: data.achievements[req.params.id] || [],
+    stats: data.stats[user.coupleId] || {}
   });
 });
 
-// Sync user data
-app.post('/api/user/:telegramId/sync', (req, res) => {
-  const id = req.params.telegramId;
-  const user = data.users[id];
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  
-  const { progress, calendar, pregnancy, cycles } = req.body;
-  
-  if (progress) data.progress[id] = progress;
+app.post('/api/user/:id/sync', (req, res) => {
+  const user = data.users[req.params.id];
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  const { progress, calendar, pregnancy, cycles, stats } = req.body;
+  if (progress) data.progress[req.params.id] = progress;
   if (calendar !== undefined) data.calendar[user.coupleId] = calendar;
   if (pregnancy !== undefined) data.pregnancy[user.coupleId] = pregnancy;
   if (cycles !== undefined) data.cycles[user.coupleId] = cycles;
-  
+  if (stats !== undefined) data.stats[user.coupleId] = stats;
   saveData();
   res.json({ success: true });
 });
 
-// Content
+// === WISHES ===
+app.get('/api/couple/:coupleId/wishes', (req, res) => {
+  const wishes = data.wishes[req.params.coupleId] || { partner1: [], partner2: [] };
+  res.json(wishes);
+});
+
+app.post('/api/couple/:coupleId/wishes', (req, res) => {
+  const { odId, odItem, isPartner1 } = req.body;
+  if (!data.wishes[req.params.coupleId]) data.wishes[req.params.coupleId] = { partner1: [], partner2: [] };
+  const key = isPartner1 ? 'partner1' : 'partner2';
+  data.wishes[req.params.coupleId][key].push({ id: Date.now(), item: odItem, added: new Date().toISOString() });
+  saveData();
+  res.json({ success: true, wishes: data.wishes[req.params.coupleId] });
+});
+
+app.delete('/api/couple/:coupleId/wishes/:wishId', (req, res) => {
+  const { isPartner1 } = req.body;
+  if (!data.wishes[req.params.coupleId]) return res.json({ success: false });
+  const key = isPartner1 ? 'partner1' : 'partner2';
+  data.wishes[req.params.coupleId][key] = data.wishes[req.params.coupleId][key].filter(w => w.id != req.params.wishId);
+  saveData();
+  res.json({ success: true });
+});
+
+// === ACHIEVEMENTS ===
+const ACHIEVEMENTS = [
+  { id: 'first_partner', name: 'Первая связь', desc: 'Связали аккаунты', icon: '💑' },
+  { id: 'first_intimate', name: 'Первая запись', desc: 'Добавили первую запись в календарь', icon: '📅' },
+  { id: 'ten_intimate', name: 'Десятка', desc: '10 записей в календаре', icon: '🔟' },
+  { id: 'first_test', name: 'Тестировщик', desc: 'Прошли первый тест', icon: '📝' },
+  { id: 'all_tests', name: 'Знаток', desc: 'Прошли все тесты', icon: '🎓' },
+  { id: 'ten_positions', name: 'Экспериментатор', desc: 'Попробовали 10 поз', icon: '🔥' },
+  { id: 'thirty_days', name: '30 дней вместе', desc: 'Месяц в приложении', icon: '📆' },
+  { id: 'hundred_questions', name: 'Болтуны', desc: 'Ответили на 100 вопросов', icon: '💬' },
+  { id: 'week_streak', name: 'Неделя страсти', desc: '7 дней подряд близости', icon: '🔥' },
+  { id: 'first_challenge', name: 'Вызов принят', desc: 'Выполнили первый вызов', icon: '🎯' },
+  { id: 'diary_writer', name: 'Летописец', desc: '10 записей в дневнике', icon: '📖' },
+  { id: 'mood_tracker', name: 'Эмоциональный', desc: 'Отмечали настроение 7 дней', icon: '😊' }
+];
+
+function checkAchievement(userId, achievementId) {
+  if (!data.achievements[userId]) data.achievements[userId] = [];
+  if (!data.achievements[userId].includes(achievementId)) {
+    data.achievements[userId].push(achievementId);
+    saveData();
+    return true;
+  }
+  return false;
+}
+
+app.get('/api/achievements', (req, res) => res.json(ACHIEVEMENTS));
+
+app.get('/api/user/:id/achievements', (req, res) => {
+  res.json(data.achievements[req.params.id] || []);
+});
+
+app.post('/api/user/:id/achievements/:achId', (req, res) => {
+  const added = checkAchievement(req.params.id, req.params.achId);
+  res.json({ success: true, added });
+});
+
+// === CHALLENGES ===
+const CHALLENGE_TEMPLATES = [
+  { id: 1, title: 'Массаж 15 минут', desc: 'Сделай партнёру расслабляющий массаж', icon: '💆', points: 10 },
+  { id: 2, title: 'Завтрак в постель', desc: 'Приготовь и подай завтрак', icon: '🍳', points: 15 },
+  { id: 3, title: 'Комплимент каждый час', desc: 'Говори комплименты весь день', icon: '💕', points: 10 },
+  { id: 4, title: 'Новая поза', desc: 'Попробуйте позу которую ещё не пробовали', icon: '🔥', points: 20 },
+  { id: 5, title: 'Свидание без телефонов', desc: 'Весь вечер без гаджетов', icon: '📵', points: 15 },
+  { id: 6, title: 'Эротический танец', desc: 'Станцуй для партнёра', icon: '💃', points: 20 },
+  { id: 7, title: 'Письмо любви', desc: 'Напиши романтическое письмо', icon: '💌', points: 10 },
+  { id: 8, title: 'Душ вдвоём', desc: 'Примите душ вместе', icon: '🚿', points: 15 },
+  { id: 9, title: 'Ужин при свечах', desc: 'Романтический ужин дома', icon: '🕯️', points: 15 },
+  { id: 10, title: 'Секрет фантазия', desc: 'Расскажи тайную фантазию', icon: '🤫', points: 25 },
+  { id: 11, title: '10 поцелуев', desc: 'Поцелуй партнёра 10 раз за день', icon: '💋', points: 10 },
+  { id: 12, title: 'Игра на раздевание', desc: 'Сыграйте в карты/игру на раздевание', icon: '🃏', points: 20 },
+  { id: 13, title: 'Сюрприз', desc: 'Сделай неожиданный сюрприз', icon: '🎁', points: 15 },
+  { id: 14, title: 'Фотосессия', desc: 'Устройте эротическую фотосессию', icon: '📸', points: 25 },
+  { id: 15, title: 'Ролевая игра', desc: 'Разыграйте сценарий', icon: '🎭', points: 30 }
+];
+
+app.get('/api/challenges/templates', (req, res) => res.json(CHALLENGE_TEMPLATES));
+
+app.get('/api/couple/:coupleId/challenges', (req, res) => {
+  res.json(data.challenges[req.params.coupleId] || []);
+});
+
+app.post('/api/couple/:coupleId/challenges', (req, res) => {
+  const { odTemplateId, odTarget, odFrom } = req.body;
+  const template = CHALLENGE_TEMPLATES.find(t => t.id == odTemplateId);
+  if (!data.challenges[req.params.coupleId]) data.challenges[req.params.coupleId] = [];
+  data.challenges[req.params.coupleId].push({
+    id: Date.now(),
+    templateId: odTemplateId,
+    title: template?.title || 'Вызов',
+    desc: template?.desc || '',
+    icon: template?.icon || '🎯',
+    points: template?.points || 10,
+    from: odFrom,
+    target: odTarget,
+    status: 'active',
+    created: new Date().toISOString()
+  });
+  saveData();
+  res.json({ success: true, challenges: data.challenges[req.params.coupleId] });
+});
+
+app.post('/api/couple/:coupleId/challenges/:challengeId/complete', (req, res) => {
+  if (!data.challenges[req.params.coupleId]) return res.json({ success: false });
+  const ch = data.challenges[req.params.coupleId].find(c => c.id == req.params.challengeId);
+  if (ch) {
+    ch.status = 'completed';
+    ch.completedAt = new Date().toISOString();
+    saveData();
+  }
+  res.json({ success: true });
+});
+
+// === DIARY ===
+app.get('/api/couple/:coupleId/diary', (req, res) => {
+  res.json(data.diary[req.params.coupleId] || []);
+});
+
+app.post('/api/couple/:coupleId/diary', (req, res) => {
+  const { odTitle, odContent, odMood, odAuthor } = req.body;
+  if (!data.diary[req.params.coupleId]) data.diary[req.params.coupleId] = [];
+  data.diary[req.params.coupleId].unshift({
+    id: Date.now(),
+    title: odTitle,
+    content: odContent,
+    mood: odMood,
+    author: odAuthor,
+    date: new Date().toISOString()
+  });
+  saveData();
+  res.json({ success: true, diary: data.diary[req.params.coupleId] });
+});
+
+app.delete('/api/couple/:coupleId/diary/:entryId', (req, res) => {
+  if (!data.diary[req.params.coupleId]) return res.json({ success: false });
+  data.diary[req.params.coupleId] = data.diary[req.params.coupleId].filter(d => d.id != req.params.entryId);
+  saveData();
+  res.json({ success: true });
+});
+
+// === MOOD ===
+app.get('/api/couple/:coupleId/mood', (req, res) => {
+  res.json(data.mood[req.params.coupleId] || []);
+});
+
+app.post('/api/couple/:coupleId/mood', (req, res) => {
+  const { odUserId, odMood, odNote } = req.body;
+  if (!data.mood[req.params.coupleId]) data.mood[req.params.coupleId] = [];
+  // Remove today's mood from same user
+  const today = new Date().toISOString().split('T')[0];
+  data.mood[req.params.coupleId] = data.mood[req.params.coupleId].filter(m => !(m.odUserId === odUserId && m.date.startsWith(today)));
+  data.mood[req.params.coupleId].unshift({
+    id: Date.now(),
+    odUserId,
+    mood: odMood,
+    note: odNote,
+    date: new Date().toISOString()
+  });
+  saveData();
+  res.json({ success: true, mood: data.mood[req.params.coupleId] });
+});
+
+// === CHAT ===
+app.get('/api/couple/:coupleId/chat', (req, res) => {
+  res.json(data.chat[req.params.coupleId] || []);
+});
+
+app.post('/api/couple/:coupleId/chat', (req, res) => {
+  const { odFrom, odMessage } = req.body;
+  if (!data.chat[req.params.coupleId]) data.chat[req.params.coupleId] = [];
+  data.chat[req.params.coupleId].push({
+    id: Date.now(),
+    from: odFrom,
+    message: odMessage,
+    time: new Date().toISOString()
+  });
+  // Keep last 100 messages
+  if (data.chat[req.params.coupleId].length > 100) {
+    data.chat[req.params.coupleId] = data.chat[req.params.coupleId].slice(-100);
+  }
+  saveData();
+  res.json({ success: true, chat: data.chat[req.params.coupleId] });
+});
+
+// === COMPLIMENTS ===
+const COMPLIMENTS = [
+  "Ты делаешь меня счастливее каждый день 💕",
+  "Твоя улыбка — моё любимое зрелище 😊",
+  "Ты самый красивый человек на свете ✨",
+  "Мне повезло быть с тобой 🍀",
+  "Ты заставляешь моё сердце биться быстрее 💓",
+  "Я люблю просыпаться рядом с тобой ☀️",
+  "Ты мой лучший друг и любовь 💑",
+  "Каждый момент с тобой — подарок 🎁",
+  "Ты делаешь обычные дни особенными ⭐",
+  "Я горжусь тем что ты рядом 🏆",
+  "Твои объятия — лучшее место 🤗",
+  "Ты понимаешь меня как никто 💭",
+  "С тобой я могу быть собой 🦋",
+  "Ты моя половинка 💝",
+  "Люблю как ты смеёшься 😄",
+  "Ты пахнешь как дом 🏠",
+  "Мои чувства к тебе только растут 📈",
+  "Ты — причина моей улыбки 😃",
+  "Хочу состариться с тобой 👴👵",
+  "Ты лучшее что случилось в моей жизни 🌟"
+];
+
+app.get('/api/compliment', (req, res) => {
+  const idx = Math.floor(Math.random() * COMPLIMENTS.length);
+  res.json({ compliment: COMPLIMENTS[idx] });
+});
+
+// === RANDOM DATE ===
+const DATE_IDEAS = {
+  home: ["Марафон фильмов 🎬", "Совместная готовка 👨‍🍳", "Настольные игры 🎲", "Спа вечер дома 💆", "Караоке 🎤", "Танцы в гостиной 💃", "Построить форт из одеял 🏰", "Дегустация вина 🍷", "Йога вдвоём 🧘", "Рисование вместе 🎨"],
+  outside: ["Пикник в парке 🧺", "Прогулка на закате 🌅", "Боулинг 🎳", "Кино 🎥", "Ресторан 🍽️", "Музей 🏛️", "Концерт 🎵", "Каток ⛸️", "Квест-комната 🔐", "Мини-гольф ⛳"],
+  adventure: ["Поход 🥾", "Велопрогулка 🚴", "Скалодром 🧗", "Картинг 🏎️", "Аквапарк 🏊", "Полёт на воздушном шаре 🎈", "Мастер-класс 👨‍🏫", "Escape room 🚪", "Прыжок с парашютом 🪂", "Спонтанное путешествие 🗺️"],
+  romantic: ["Ужин при свечах 🕯️", "Массаж друг другу 💆", "Звёзды на крыше ⭐", "Написать друг другу письма 💌", "Альбом воспоминаний 📸", "Танец под любимую песню 💑", "Завтрак в постель 🥐", "Ванна с пеной вдвоём 🛁", "Обмен подарками 🎁", "Перечитать старые переписки 📱"]
+};
+
+app.get('/api/random-date', (req, res) => {
+  const categories = Object.keys(DATE_IDEAS);
+  const cat = categories[Math.floor(Math.random() * categories.length)];
+  const ideas = DATE_IDEAS[cat];
+  const idea = ideas[Math.floor(Math.random() * ideas.length)];
+  res.json({ category: cat, idea });
+});
+
+app.get('/api/random-date/:category', (req, res) => {
+  const ideas = DATE_IDEAS[req.params.category] || DATE_IDEAS.home;
+  const idea = ideas[Math.floor(Math.random() * ideas.length)];
+  res.json({ category: req.params.category, idea });
+});
+
+// === STATS ===
+app.get('/api/couple/:coupleId/stats', (req, res) => {
+  res.json(data.stats[req.params.coupleId] || { intimate: [], positions: {}, tests: {} });
+});
+
+app.post('/api/couple/:coupleId/stats/intimate', (req, res) => {
+  const { date, position } = req.body;
+  if (!data.stats[req.params.coupleId]) data.stats[req.params.coupleId] = { intimate: [], positions: {}, tests: {} };
+  data.stats[req.params.coupleId].intimate.push({ date: date || new Date().toISOString(), position });
+  if (position) {
+    data.stats[req.params.coupleId].positions[position] = (data.stats[req.params.coupleId].positions[position] || 0) + 1;
+  }
+  saveData();
+  res.json({ success: true });
+});
+
+// === CONTENT ===
 app.get('/api/content', (req, res) => {
   res.json({
     questionLevels: [
-      {id:1,title:'Знакомство',desc:'Лёгкие вопросы для начала',color:'l1',icon:'🌱',questions:[
-        {q:'Какой момент сегодня был лучшим?',h:'Делитесь мелочами'},{q:'В какой стране мечтаешь побывать?',h:'Мечты'},{q:'Любимое воспоминание из детства?',h:'Детство'},{q:'Что тебя вдохновляет?',h:'Мотивация'},{q:'Какую суперспособность хотел бы?',h:'Фантазии'},{q:'Идеальный выходной — какой он?',h:'Отдых'},{q:'Какая песня поднимает настроение?',h:'Музыка'},{q:'Самое необычное блюдо, что пробовал?',h:'Еда'},{q:'Кем мечтал стать в детстве?',h:'Мечты'},{q:'Что тебя удивило недавно?',h:'Эмоции'},
-        {q:'Любимое время года и почему?'},{q:'Какой фильм можешь пересматривать?'},{q:'Утро или вечер — что твоё?'},{q:'Море или горы?'},{q:'Какой талант хотел бы иметь?'},{q:'Самый странный твой страх?'},{q:'Что всегда поднимает настроение?'},{q:'Любимый праздник?'},{q:'Какую книгу посоветуешь?'},{q:'Что тебя раздражает в людях?'},
-        {q:'Какой комплимент запомнился?'},{q:'Чего ты никогда не делал, но хотел бы?'},{q:'Самое смелое, что делал?'},{q:'Какую привычку хотел бы изменить?'},{q:'Что ты ценишь в друзьях?'},{q:'Какой день был лучшим в жизни?'},{q:'Чем гордишься?'},{q:'Что для тебя роскошь?'},{q:'Как справляешься со стрессом?'},{q:'Какое место для тебя особенное?'},
-        {q:'Что бы сделал с миллионом?'},{q:'Любимое занятие в одиночестве?'},{q:'Что тебя смешит?'}
+      {id:1,title:'Знакомство',desc:'Лёгкие вопросы',color:'l1',icon:'🌱',questions:[
+        {q:'Какой момент сегодня был лучшим?'},{q:'В какой стране мечтаешь побывать?'},{q:'Любимое воспоминание из детства?'},{q:'Что тебя вдохновляет?'},{q:'Какую суперспособность хотел бы?'},{q:'Идеальный выходной — какой он?'},{q:'Какая песня поднимает настроение?'},{q:'Самое необычное блюдо?'},{q:'Кем мечтал стать в детстве?'},{q:'Что удивило недавно?'},
+        {q:'Любимое время года?'},{q:'Какой фильм пересматриваешь?'},{q:'Утро или вечер?'},{q:'Море или горы?'},{q:'Какой талант хотел бы?'},{q:'Странный страх?'},{q:'Что поднимает настроение?'},{q:'Любимый праздник?'},{q:'Какую книгу посоветуешь?'},{q:'Что раздражает в людях?'},
+        {q:'Какой комплимент запомнился?'},{q:'Чего не делал, но хотел бы?'},{q:'Самое смелое что делал?'},{q:'Какую привычку изменить?'},{q:'Что ценишь в друзьях?'},{q:'Лучший день в жизни?'},{q:'Чем гордишься?'},{q:'Что для тебя роскошь?'},{q:'Как справляешься со стрессом?'},{q:'Особенное место?'},
+        {q:'Что сделал бы с миллионом?'},{q:'Занятие в одиночестве?'},{q:'Что смешит?'},{q:'Любимая еда?'}
       ]},
-      {id:2,title:'Отношения',desc:'Про нас и наши чувства',color:'l2',icon:'💙',questions:[
-        {q:'Что тебе нравится в наших отношениях?',h:'Позитив'},{q:'Когда ты понял, что я особенный человек?',h:'Чувства'},{q:'Что я делаю, от чего тебе тепло?',h:'Забота'},{q:'Какое наше воспоминание любимое?',h:'Память'},{q:'Чего бы хотел больше в отношениях?',h:'Желания'},{q:'Как ты чувствуешь мою любовь?',h:'Восприятие'},{q:'Что тебя во мне удивляет?',h:'Открытия'},{q:'Какой наш момент был самым смешным?',h:'Юмор'},{q:'Когда ты мной гордишься?',h:'Гордость'},{q:'Что бы ты изменил в нашем начале?',h:'Прошлое'},
-        {q:'Как ты представляешь нас через 5 лет?'},{q:'Что для тебя верность?'},{q:'Когда тебе со мной спокойнее всего?'},{q:'Какое качество во мне главное?'},{q:'Что тебя во мне раздражает?',h:'Честность'},{q:'Как понять, что тебе плохо?'},{q:'Что ты хочешь, чтобы я знал о тебе?'},{q:'Когда ты скучаешь по мне?'},{q:'Что для тебя идеальное свидание?'},{q:'Как ты проявляешь любовь?'},
-        {q:'Чего ты боишься в отношениях?'},{q:'Что тебе важно обсудить, но сложно?'},{q:'Какая наша традиция любимая?'},{q:'Когда ты злишься на меня?'},{q:'Что я могу сделать лучше?'},{q:'Как мне тебя поддержать?'},{q:'Что ты никому не рассказывал о нас?'},{q:'Когда ты чувствуешь себя любимым?'},{q:'Что для тебя предательство?'},{q:'Какая мелочь от меня тебя радует?'},
-        {q:'Что ты думаешь о нашем будущем?'},{q:'Что изменилось в тебе благодаря нам?'},{q:'Как ты справляешься с ревностью?'}
+      {id:2,title:'Отношения',desc:'Про нас',color:'l2',icon:'💙',questions:[
+        {q:'Что нравится в наших отношениях?'},{q:'Когда понял что я особенный?'},{q:'Что я делаю от чего тепло?'},{q:'Любимое наше воспоминание?'},{q:'Чего хотел бы больше?'},{q:'Как чувствуешь мою любовь?'},{q:'Что во мне удивляет?'},{q:'Самый смешной наш момент?'},{q:'Когда мной гордишься?'},{q:'Что изменил бы в начале?'},
+        {q:'Как видишь нас через 5 лет?'},{q:'Что для тебя верность?'},{q:'Когда со мной спокойнее?'},{q:'Главное качество во мне?'},{q:'Что раздражает во мне?'},{q:'Как понять что тебе плохо?'},{q:'Что хочешь чтобы знал?'},{q:'Когда скучаешь?'},{q:'Идеальное свидание?'},{q:'Как проявляешь любовь?'},
+        {q:'Чего боишься в отношениях?'},{q:'Что важно обсудить но сложно?'},{q:'Любимая традиция?'},{q:'Когда злишься на меня?'},{q:'Что могу делать лучше?'},{q:'Как поддержать тебя?'},{q:'Что не рассказывал о нас?'},{q:'Когда чувствуешь себя любимым?'},{q:'Что для тебя предательство?'},{q:'Какая мелочь радует?'},
+        {q:'Что думаешь о будущем?'},{q:'Что изменилось благодаря нам?'},{q:'Как справляешься с ревностью?'},{q:'Когда скучал сильнее всего?'}
       ]},
-      {id:3,title:'Глубже',desc:'Эмоции, страхи, уязвимость',color:'l3',icon:'🔥',questions:[
-        {q:'Какой твой самый большой страх?',h:'Страхи'},{q:'Что тебя ранит сильнее всего?',h:'Боль'},{q:'О чём ты жалеешь?',h:'Сожаления'},{q:'Когда ты плакал последний раз?',h:'Слёзы'},{q:'Что ты скрываешь от других?',h:'Секреты'},{q:'Какая травма влияет на тебя?',h:'Прошлое'},{q:'Чего ты стыдишься?',h:'Стыд'},{q:'Когда ты чувствуешь себя одиноким?',h:'Одиночество'},{q:'Что бы изменил в своём прошлом?',h:'Сожаления'},{q:'Какой момент тебя сломал?',h:'Кризис'},
-        {q:'Что ты не можешь себе простить?'},{q:'Когда ты притворяешься?'},{q:'Что тебя пугает в будущем?'},{q:'О чём мечтаешь, но боишься сказать?'},{q:'Когда ты был на грани?'},{q:'Что разрушило бы тебя?'},{q:'Какую ложь ты поддерживаешь?'},{q:'Чего ты избегаешь?'},{q:'Что делает тебя уязвимым?'},{q:'Какие мысли тебя мучают ночью?'},
-        {q:'Что ты потерял и не отпустил?'},{q:'Когда ты предавал себя?'},{q:'Что ты скрываешь от меня?',h:'Честность'},{q:'Какой твой тёмный секрет?'},{q:'Когда ты ненавидел себя?'},{q:'Что тебе сложно принять во мне?'},{q:'Какая боль тебя сформировала?'},{q:'О чём ты не можешь говорить?'},{q:'Что ты боишься потерять?'},{q:'Когда ты чувствуешь себя ненужным?'},
-        {q:'Что тебя держит ночью без сна?'},{q:'Какой выбор был самым трудным?'},{q:'Что ты так и не сказал важным людям?'}
+      {id:3,title:'Глубже',desc:'Эмоции и страхи',color:'l3',icon:'🔥',questions:[
+        {q:'Самый большой страх?'},{q:'Что ранит сильнее всего?'},{q:'О чём жалеешь?'},{q:'Когда плакал последний раз?'},{q:'Что скрываешь от других?'},{q:'Какая травма влияет?'},{q:'Чего стыдишься?'},{q:'Когда чувствуешь одиночество?'},{q:'Что изменил бы в прошлом?'},{q:'Какой момент сломал?'},
+        {q:'Что не можешь простить себе?'},{q:'Когда притворяешься?'},{q:'Что пугает в будущем?'},{q:'О чём мечтаешь но боишься сказать?'},{q:'Когда был на грани?'},{q:'Что разрушило бы тебя?'},{q:'Какую ложь поддерживаешь?'},{q:'Чего избегаешь?'},{q:'Что делает уязвимым?'},{q:'Какие мысли мучают ночью?'},
+        {q:'Что потерял и не отпустил?'},{q:'Когда предавал себя?'},{q:'Что скрываешь от меня?'},{q:'Тёмный секрет?'},{q:'Когда ненавидел себя?'},{q:'Что сложно принять во мне?'},{q:'Какая боль сформировала?'},{q:'О чём не можешь говорить?'},{q:'Что боишься потерять?'},{q:'Когда чувствуешь себя ненужным?'},
+        {q:'Что держит без сна?'},{q:'Самый трудный выбор?'},{q:'Что не сказал важным людям?'},{q:'Когда был слабым?'}
       ]},
-      {id:4,title:'Близость',desc:'Физическая близость, желания',color:'l4',icon:'💕',questions:[
-        {q:'Что тебя возбуждает во мне?',h:'Влечение'},{q:'Какое прикосновение любимое?',h:'Тактильность'},{q:'Что бы хотел попробовать вместе?',h:'Эксперименты'},{q:'Когда ты хочешь меня больше всего?',h:'Желание'},{q:'Что я делаю, что тебе особенно нравится?',h:'Удовольствие'},{q:'Какая часть моего тела любимая?',h:'Тело'},{q:'Что тебя смущает в интиме?',h:'Границы'},{q:'Какой наш раз был лучшим?',h:'Воспоминания'},{q:'Что бы хотел чаще?',h:'Желания'},{q:'Как понять, что ты в настроении?',h:'Сигналы'},
-        {q:'Что ты любишь перед близостью?'},{q:'Какая обстановка идеальна?'},{q:'Что тебя отвлекает во время?'},{q:'Утром или вечером?'},{q:'Что бы хотел, чтобы я инициировал?'},{q:'Какой темп тебе нравится?'},{q:'Что ты думаешь о игрушках?'},{q:'Как тебе нравится целоваться?'},{q:'Что ты чувствуешь после близости?'},{q:'Какая прелюдия идеальная?'},
-        {q:'Есть ли место, где хотел бы?'},{q:'Что ты думаешь о ролевых играх?'},{q:'Какой наряд на мне тебя заводит?'},{q:'Что тебе нужно, чтобы расслабиться?'},{q:'Как тебе нравится, когда тебя трогают?'},{q:'Что бы никогда не попробовал?'},{q:'Какие слова тебя возбуждают?'},{q:'Что для тебя оргазм?'},{q:'Как часто ты хотел бы близости?'},{q:'Что улучшило бы нашу интимную жизнь?'},
-        {q:'Нравится ли тебе доминировать или подчиняться?'},{q:'Что ты фантазируешь обо мне?'},{q:'Какой эксперимент тебя интригует?'}
+      {id:4,title:'Близость',desc:'Желания',color:'l4',icon:'💕',questions:[
+        {q:'Что возбуждает во мне?'},{q:'Любимое прикосновение?'},{q:'Что хотел бы попробовать?'},{q:'Когда хочешь меня больше всего?'},{q:'Что особенно нравится?'},{q:'Любимая часть тела?'},{q:'Что смущает в интиме?'},{q:'Лучший наш раз?'},{q:'Что хотел бы чаще?'},{q:'Как понять что в настроении?'},
+        {q:'Что любишь перед близостью?'},{q:'Идеальная обстановка?'},{q:'Что отвлекает во время?'},{q:'Утром или вечером?'},{q:'Что хотел бы чтобы инициировал?'},{q:'Какой темп нравится?'},{q:'Что думаешь об игрушках?'},{q:'Как нравится целоваться?'},{q:'Что чувствуешь после?'},{q:'Идеальная прелюдия?'},
+        {q:'Место где хотел бы?'},{q:'Что думаешь о ролевых играх?'},{q:'Какой наряд заводит?'},{q:'Что нужно чтобы расслабиться?'},{q:'Как нравится когда трогают?'},{q:'Что никогда не попробовал бы?'},{q:'Какие слова возбуждают?'},{q:'Что для тебя оргазм?'},{q:'Как часто хотел бы близости?'},{q:'Что улучшило бы интим?'},
+        {q:'Доминировать или подчиняться?'},{q:'Что фантазируешь обо мне?'},{q:'Какой эксперимент интригует?'},{q:'Любимая поза?'}
       ]},
-      {id:5,title:'Без табу',desc:'Откровенные желания и фантазии',color:'l5',icon:'🔞',questions:[
-        {q:'Какая твоя главная фантазия?',h:'Фантазии'},{q:'Что бы хотел, чтобы я сделал с тобой?',h:'Желания'},{q:'Смотришь ли ты порно? Какое?',h:'Честность'},{q:'Что тебя заводит, но ты стесняешься?',h:'Секреты'},{q:'Пробовал ли что-то необычное раньше?',h:'Опыт'},{q:'Какой секс был лучшим в жизни?',h:'Воспоминания'},{q:'Что думаешь о сексе втроём?',h:'Границы'},{q:'Есть ли фетиш, о котором молчишь?',h:'Фетиши'},{q:'Что бы хотел, чтобы я надел?',h:'Внешность'},{q:'Нравится ли тебе смотреть на себя?',h:'Эксгибиционизм'},
-        {q:'Какие игрушки хотел бы попробовать?'},{q:'Что думаешь об анальном сексе?'},{q:'Нравится ли тебе боль?'},{q:'Хотел бы быть связанным?'},{q:'Что думаешь о сексе в публичном месте?'},{q:'Какой твой идеальный сценарий?'},{q:'Что бы сделал, если бы не было границ?'},{q:'Нравится ли dirty talk?'},{q:'Какое видео нас вместе хотел бы?'},{q:'Что думаешь о свинге?'},
-        {q:'Хотел бы попробовать БДСМ?'},{q:'Что думаешь о секс-вечеринках?'},{q:'Какую роль хотел бы сыграть?'},{q:'Что тебя заводит в других людях?'},{q:'Думал ли о сексе с моим другом/подругой?'},{q:'Какой твой самый грязный секрет?'},{q:'Что бы хотел снять на видео?'},{q:'Нравится ли идея измены в игре?'},{q:'Что думаешь об оргии?'},{q:'Какая самая дикая вещь, что делал?'},
-        {q:'Что бы хотел попробовать только раз?'},{q:'Есть ли человек, о ком фантазируешь?'},{q:'Какой твой предел?'}
+      {id:5,title:'Без табу',desc:'Фантазии',color:'l5',icon:'🔞',questions:[
+        {q:'Главная фантазия?'},{q:'Что хотел бы чтобы сделал с тобой?'},{q:'Смотришь порно? Какое?'},{q:'Что заводит но стесняешься?'},{q:'Пробовал необычное раньше?'},{q:'Лучший секс в жизни?'},{q:'Что думаешь о сексе втроём?'},{q:'Есть фетиш о котором молчишь?'},{q:'Что хотел бы чтобы надел?'},{q:'Нравится смотреть на себя?'},
+        {q:'Какие игрушки попробовать?'},{q:'Что думаешь об анальном?'},{q:'Нравится боль?'},{q:'Хотел бы быть связанным?'},{q:'Секс в публичном месте?'},{q:'Идеальный сценарий?'},{q:'Что сделал бы без границ?'},{q:'Нравится dirty talk?'},{q:'Какое видео хотел бы?'},{q:'Что думаешь о свинге?'},
+        {q:'Попробовать БДСМ?'},{q:'Секс-вечеринки?'},{q:'Какую роль сыграть?'},{q:'Что заводит в других?'},{q:'Думал о сексе с другом?'},{q:'Самый грязный секрет?'},{q:'Что снять на видео?'},{q:'Идея измены в игре?'},{q:'Что думаешь об оргии?'},{q:'Самая дикая вещь?'},
+        {q:'Что попробовать только раз?'},{q:'О ком фантазируешь?'},{q:'Какой твой предел?'},{q:'Самое постыдное желание?'}
       ]},
-      {id:6,title:'Запретное',desc:'Самые тёмные желания',color:'l6',icon:'⛓️',questions:[
-        {q:'Какая мысль тебя возбуждает, но пугает?',h:'Тьма'},{q:'Что бы сделал, если бы никто не узнал?',h:'Секреты'},{q:'Какой запрет хочешь нарушить?',h:'Табу'},{q:'Что тебя привлекает в опасности?',h:'Адреналин'},{q:'Самое постыдное, что тебя заводит?',h:'Стыд'},{q:'Что бы попросил, если бы не боялся?',h:'Страхи'},{q:'Какая часть тебя самая тёмная?',h:'Тень'},{q:'Что ты скрываешь даже от себя?',h:'Подсознание'},{q:'Какой твой самый грязный сон?',h:'Сны'},{q:'Что бы сделал в полной анонимности?',h:'Свобода'},
-        {q:'Что думаешь о полном подчинении?'},{q:'Привлекает ли тебя насилие в сексе?'},{q:'Какую границу хочешь пересечь?'},{q:'Что тебя заводит в униженении?'},{q:'Думал ли о чём-то незаконном?'},{q:'Какой твой самый тёмный фетиш?'},{q:'Что бы сделал с полной властью?'},{q:'Привлекает ли тебя боль другого?'},{q:'Какая фантазия тебя пугает?'},{q:'Что ты подавляешь в себе?'},
-        {q:'Какой опыт тебя сломал бы?'},{q:'Что думаешь о полной потере контроля?'},{q:'Какая версия тебя самая опасная?'},{q:'Что бы сделал без последствий?'},{q:'Какое желание тебя разрушает?'},{q:'Что скрываешь от всех?'},{q:'Какой твой личный ад?'},{q:'Что бы сделал ради удовольствия?'},{q:'Какая часть тебя хочет выйти?'},{q:'Что ты никогда не скажешь вслух?'},
-        {q:'Какой твой предел боли?'},{q:'Что тебя заводит в запретном?'},{q:'Какой твой финальный секрет?'}
+      {id:6,title:'Запретное',desc:'Тёмные желания',color:'l6',icon:'⛓️',questions:[
+        {q:'Что возбуждает но пугает?'},{q:'Что сделал бы если никто не узнает?'},{q:'Какой запрет нарушить?'},{q:'Что привлекает в опасности?'},{q:'Постыдное что заводит?'},{q:'Что попросил бы не боясь?'},{q:'Самая тёмная часть тебя?'},{q:'Что скрываешь от себя?'},{q:'Самый грязный сон?'},{q:'Что сделал бы анонимно?'},
+        {q:'Полное подчинение?'},{q:'Привлекает насилие?'},{q:'Какую границу пересечь?'},{q:'Что заводит в унижении?'},{q:'Думал о незаконном?'},{q:'Самый тёмный фетиш?'},{q:'Что сделал бы с властью?'},{q:'Привлекает боль другого?'},{q:'Какая фантазия пугает?'},{q:'Что подавляешь?'},
+        {q:'Какой опыт сломал бы?'},{q:'Полная потеря контроля?'},{q:'Самая опасная версия тебя?'},{q:'Что сделал бы без последствий?'},{q:'Какое желание разрушает?'},{q:'Что скрываешь от всех?'},{q:'Личный ад?'},{q:'Что сделал бы ради удовольствия?'},{q:'Какая часть хочет выйти?'},{q:'Что никогда не скажешь?'},
+        {q:'Предел боли?'},{q:'Что заводит в запретном?'},{q:'Финальный секрет?'},{q:'Самое тёмное желание?'}
       ]}
     ],
     positions: [
-      {name:'Миссионерская',icon:'🙏',diff:1,desc:'Классика близости лицом к лицу',howTo:['Она ложится на спину','Он сверху между её ног','Руки свободны для ласк'],tip:'Подложите подушку под её бёдра'},
-      {name:'Наездница',icon:'🏇',diff:1,desc:'Она сверху, контролирует ритм',howTo:['Он лежит на спине','Она садится сверху лицом к нему','Опирается на его грудь или колени'],tip:'Двигайтесь бёдрами вперёд-назад'},
-      {name:'Догги-стайл',icon:'🐕',diff:1,desc:'Сзади, глубокое проникновение',howTo:['Она на четвереньках','Он сзади на коленях','Держит её за бёдра'],tip:'Она может опустить грудь на кровать'},
-      {name:'Ложки',icon:'🥄',diff:1,desc:'Нежная поза на боку',howTo:['Оба лежат на боку','Он сзади','Она прижимается спиной'],tip:'Идеально для утреннего секса'},
-      {name:'Лотос',icon:'🪷',diff:2,desc:'Интимная поза сидя',howTo:['Он сидит скрестив ноги','Она садится к нему на колени','Обнимает его ногами'],tip:'Максимальный контакт тел'},
-      {name:'69',icon:'🔄',diff:2,desc:'Взаимные оральные ласки',howTo:['Лягте противоположно друг другу','Головы у гениталий партнёра','Ласкайте одновременно'],tip:'Подстраивайте темп друг под друга'},
-      {name:'Стоя у стены',icon:'🧱',diff:2,desc:'Страсть и спонтанность',howTo:['Она спиной к стене','Он поднимает её за бёдра','Она обхватывает его ногами'],tip:'Стена должна быть надёжной'},
-      {name:'На стуле',icon:'🪑',diff:2,desc:'Он сидит, она сверху',howTo:['Он садится на крепкий стул','Она садится к нему лицом или спиной','Опирается на его колени'],tip:'Стул без подлокотников удобнее'},
-      {name:'Бабочка',icon:'🦋',diff:2,desc:'Она на краю, он стоит',howTo:['Она ложится на край кровати/стола','Ноги подняты или на его плечах','Он стоит или на коленях'],tip:'Регулируйте высоту подушками'},
-      {name:'Прон-боун',icon:'🦴',diff:1,desc:'Она на животе, он сверху',howTo:['Она лежит на животе','Ноги вместе или слегка раздвинуты','Он сверху сзади'],tip:'Подушка под её бёдра меняет угол'}
+      {name:'Миссионерская',icon:'🙏',diff:1,desc:'Классика лицом к лицу',howTo:['Она на спине','Он сверху','Руки свободны'],tip:'Подушка под бёдра',variants:['Ноги на плечи','Ноги обхватывают']},
+      {name:'Наездница',icon:'🏇',diff:1,desc:'Она сверху контролирует',howTo:['Он лежит','Она сверху лицом','Опора на грудь'],tip:'Бёдрами вперёд-назад'},
+      {name:'Догги-стайл',icon:'🐕',diff:1,desc:'Сзади глубоко',howTo:['Она на четвереньках','Он сзади','Держит бёдра'],tip:'Грудь на кровать'},
+      {name:'Ложки',icon:'🥄',diff:1,desc:'Нежно на боку',howTo:['Оба на боку','Он сзади','Прижаться'],tip:'Для утреннего секса'},
+      {name:'Лотос',icon:'🪷',diff:2,desc:'Сидя максимально близко',howTo:['Он сидит','Она на колени','Обнять ногами'],tip:'Раскачиваться вместе'},
+      {name:'69',icon:'🔄',diff:2,desc:'Взаимный оральный',howTo:['Противоположно','Головы у гениталий','Одновременно'],tip:'Синхронный темп'},
+      {name:'Стоя у стены',icon:'🧱',diff:2,desc:'Страсть и спонтанность',howTo:['Она к стене','Он поднимает','Она ногами'],tip:'Надёжная стена'},
+      {name:'На стуле',icon:'🪑',diff:2,desc:'Сидя с опорой',howTo:['Он на стуле','Она сверху','Опора на колени'],tip:'Без подлокотников'},
+      {name:'Бабочка',icon:'🦋',diff:2,desc:'Она на краю он стоит',howTo:['Она на краю','Ноги подняты','Он стоит'],tip:'Подушки для высоты'},
+      {name:'Прон-боун',icon:'🦴',diff:1,desc:'Она на животе',howTo:['Она на животе','Ноги вместе','Он сверху сзади'],tip:'Подушка под бёдра'},
+      {name:'Амазонка',icon:'👸',diff:2,desc:'Она на корточках',howTo:['Он лежит','Она на корточках','Вверх-вниз'],tip:'Выносливость'},
+      {name:'Ножницы',icon:'✂️',diff:2,desc:'Переплетённые ноги',howTo:['На боку лицом','Ноги переплетены','Медленно'],tip:'Очень интимно'},
+      {name:'Глубокий удар',icon:'💫',diff:2,desc:'Максимальная глубина',howTo:['Она на спине','Колени к груди','Он сверху'],tip:'Осторожно'},
+      {name:'Водопад',icon:'🌊',diff:3,desc:'Голова свисает',howTo:['Он голова с края','Она сверху','Приток крови'],tip:'Не более 2-3 минут'},
+      {name:'Танец на коленях',icon:'💃',diff:2,desc:'Оба на коленях',howTo:['Оба на коленях','Она спиной','Он обнимает'],tip:'Мягкая поверхность'},
+      {name:'Колыбель',icon:'🤱',diff:1,desc:'Нежная сидячая',howTo:['Он сидит','Она на коленях лицом','Обнять'],tip:'Раскачиваться'},
+      {name:'Лягушка',icon:'🐸',diff:2,desc:'Она приседает',howTo:['Он лежит','Она приседает','Опора на грудь'],tip:'Контроль глубины'},
+      {name:'Арка',icon:'🏛️',diff:3,desc:'Она выгибается',howTo:['Он на коленях','Она выгибается','Опора сзади'],tip:'Нужна гибкость'},
+      {name:'Обратная наездница',icon:'🔙',diff:2,desc:'Она спиной сверху',howTo:['Он лежит','Она спиной','Опора на ноги'],tip:'Хороший вид'},
+      {name:'Стол',icon:'🍽️',diff:2,desc:'На столе',howTo:['Она на краю стола','Он стоит','Притягивает'],tip:'Устойчивый стол'},
+      {name:'Подвешенная',icon:'🎪',diff:3,desc:'Он держит на весу',howTo:['Он стоит','Она ногами','На весу'],tip:'У стены легче'},
+      {name:'Орёл',icon:'🦅',diff:2,desc:'Ноги буквой V',howTo:['Она на спине','Ноги вверх V','Он на коленях'],tip:'Растяжка помогает'},
+      {name:'Русалка',icon:'🧜',diff:2,desc:'Она на боку он на коленях',howTo:['Она на боку','Он перпендикулярно','Нога на плече'],tip:'Необычный угол'},
+      {name:'Паучок',icon:'🕷️',diff:2,desc:'Сидя напротив',howTo:['Оба сидят лицом','Ноги переплетены','Опора на руки'],tip:'Качаться навстречу'},
+      {name:'Крест',icon:'✝️',diff:2,desc:'Перпендикулярно',howTo:['Она на спине','Он на боку','Её ноги через'],tip:'Необычные ощущения'},
+      {name:'Экстаз',icon:'✨',diff:2,desc:'Таз приподнят',howTo:['Она на спине подушки','Он на коленях','Глубокий угол'],tip:'Подушки обязательны'},
+      {name:'Маятник',icon:'🎯',diff:2,desc:'Раскачивание',howTo:['Миссионерская','Раскачивается','Не выходя'],tip:'Стимуляция клитора'},
+      {name:'Лиана',icon:'🌿',diff:2,desc:'Она обвивает стоя',howTo:['Оба стоят','Одна нога вверх','Обвивает'],tip:'Опора на стену'},
+      {name:'Слияние',icon:'🫂',diff:1,desc:'Максимально близко',howTo:['Любая позиция','Минимум движений','Чувствовать'],tip:'Тантра'},
+      {name:'Галоп',icon:'🐴',diff:2,desc:'Она активно сверху',howTo:['Он лежит','Она на корточках','Быстро'],tip:'Выносливость!'},
+      {name:'Тиски',icon:'🗜️',diff:2,desc:'Сжимает ногами',howTo:['Любая позиция','Сильно сжать','Плотный контакт'],tip:'Усиливает ощущения'},
+      {name:'Волна',icon:'🌊',diff:2,desc:'Волнообразные движения',howTo:['Любая позиция','Волнами','Всё тело'],tip:'Чувственно'},
+      {name:'Сфинкс',icon:'🦁',diff:2,desc:'Как сфинкс',howTo:['На локтях и коленях','Спина прогнута','Он сзади'],tip:'Как догги но ниже'},
+      {name:'Качели',icon:'🎢',diff:3,desc:'Раскачивание',howTo:['Он на краю','Она на нём','Раскачиваются'],tip:'Можно качели'},
+      {name:'Компас',icon:'🧭',diff:2,desc:'Поворот',howTo:['Он лежит','Она сверху','Поворачивается'],tip:'Медленно!'},
+      {name:'Бутон',icon:'🌸',diff:2,desc:'Свёрнута',howTo:['Поза эмбриона','Он сзади','Интимно'],tip:'Для нежного'},
+      {name:'Электричество',icon:'⚡',diff:2,desc:'Быстрые неглубокие',howTo:['Любая позиция','Короткие толчки','Не глубоко'],tip:'Стимулирует вход'},
+      {name:'Невесомость',icon:'☁️',diff:2,desc:'Подушки под тазом',howTo:['Много подушек','Почти горизонтально','С любой стороны'],tip:'Руки свободны'},
+      {name:'Вулкан',icon:'🌋',diff:2,desc:'Нарастает',howTo:['Начать медленно','Ускоряться','Взрыв'],tip:'Контроль!'},
+      {name:'Кресло',icon:'🛋️',diff:2,desc:'Он сидит она спиной',howTo:['Он в кресле','Она спиной','Откидывается'],tip:'Руки свободны'},
+      {name:'Мостик',icon:'🌉',diff:3,desc:'Он в мостике',howTo:['Он мостик','Она сверху','Осторожно'],tip:'Сила и гибкость'},
+      {name:'Перевёртыш',icon:'🔃',diff:3,desc:'Она перевёрнута',howTo:['Она на голове/плечах','Он помогает','Осторожно'],tip:'Только с подготовкой'},
+      {name:'Пирамида',icon:'🔺',diff:3,desc:'Сложный угол',howTo:['Она мостик вниз','Он сзади','Осторожно'],tip:'Для гибких'},
+      {name:'Факел',icon:'🔦',diff:2,desc:'Она голова свисает',howTo:['Она на краю голова свисает','Он сверху','Приток крови'],tip:'Не более 2 мин'},
+      {name:'Йога',icon:'🧘',diff:3,desc:'Позы йоги',howTo:['Собака мордой вниз','Он сзади стоя','Осторожно'],tip:'Нужна растяжка'},
+      {name:'Колесо',icon:'🎡',diff:3,desc:'Вращение',howTo:['Миссионерская','Поворачиваться','Не разъединяясь'],tip:'Координация'},
+      {name:'Ленивая собака',icon:'🦥',diff:1,desc:'Расслабленная догги',howTo:['Она на животе','Ноги вместе','Он сверху'],tip:'Минимум усилий'},
+      {name:'Декаданс',icon:'🍷',diff:2,desc:'Она лежит на нём',howTo:['Он на спине','Она сверху лёжа','Расслаблены'],tip:'Для долгого'},
+      {name:'Скала',icon:'🪨',diff:2,desc:'Он неподвижен',howTo:['Он неподвижен','Она двигается','Любая позиция'],tip:'Она контролирует'}
     ],
     tests: [
-      {id:'compat',title:'Сексуальная совместимость',desc:'Насколько вы подходите',time:'3 мин',questions:[
-        {q:'Как часто вы хотите близости?',opts:['Каждый день','Несколько раз в неделю','Раз в неделю','Реже']},
-        {q:'Предпочитаете утро или вечер?',opts:['Утро','Вечер','Когда угодно','Спонтанно']},
-        {q:'Насколько важна прелюдия?',opts:['Очень важна','Важна','Не очень','Можно без неё']},
-        {q:'Готовы пробовать новое?',opts:['Всегда да','Иногда','Редко','Нет']},
-        {q:'Как относитесь к игрушкам?',opts:['Люблю','Интересно','Нейтрально','Не моё']},
-        {q:'Важна ли романтика?',opts:['Очень','Да','Не всегда','Нет']}
-      ]},
-      {id:'love',title:'5 языков любви',desc:'На каком языке ваша любовь',time:'3 мин',questions:[
-        {q:'Что важнее от партнёра?',opts:['Слова любви','Время вместе','Подарки','Помощь']},
-        {q:'Как выражаете любовь?',opts:['Говорю','Провожу время','Дарю','Помогаю']},
-        {q:'Без чего не можете?',opts:['Комплиментов','Объятий','Сюрпризов','Заботы']},
-        {q:'Идеальный вечер это...',opts:['Разговоры','Обнимашки','Ужин вне дома','Вместе готовить']}
-      ]}
+      {id:'compat',title:'Сексуальная совместимость',desc:'Насколько подходите',time:'3 мин',questions:[{q:'Как часто хотите близости?',opts:['Каждый день','Несколько раз в неделю','Раз в неделю','Реже']},{q:'Утро или вечер?',opts:['Утро','Вечер','Когда угодно','Спонтанно']},{q:'Важна прелюдия?',opts:['Очень','Да','Не очень','Можно без']},{q:'Готовы пробовать новое?',opts:['Всегда','Иногда','Редко','Нет']},{q:'Игрушки?',opts:['Люблю','Интересно','Нейтрально','Не моё']},{q:'Важна романтика?',opts:['Очень','Да','Не всегда','Нет']}]},
+      {id:'love',title:'5 языков любви',desc:'Как выражаете любовь',time:'3 мин',questions:[{q:'Что важнее от партнёра?',opts:['Слова','Время','Подарки','Помощь']},{q:'Как выражаете любовь?',opts:['Говорю','Провожу время','Дарю','Помогаю']},{q:'Без чего не можете?',opts:['Комплиментов','Объятий','Сюрпризов','Заботы']},{q:'Идеальный вечер?',opts:['Разговоры','Обнимашки','Ужин','Готовить вместе']}]},
+      {id:'trust',title:'Уровень доверия',desc:'Насколько доверяете',time:'3 мин',questions:[{q:'Рассказываете всё?',opts:['Всё','Почти','Избирательно','Мало']},{q:'Проверяете телефон?',opts:['Никогда','Раньше было','Иногда','Часто']},{q:'Доверяете в финансах?',opts:['Полностью','В основном','Частично','Нет']},{q:'Дружба с противоположным полом?',opts:['Спокойно','Нормально','С опаской','Не нравится']}]},
+      {id:'comm',title:'Стиль общения',desc:'Как общаетесь',time:'3 мин',questions:[{q:'Как решаете конфликты?',opts:['Сразу обсуждаем','Пауза','Игнорируем','Ссоримся']},{q:'Говорите о чувствах?',opts:['Каждый день','Часто','Редко','Почти никогда']},{q:'Реакция на критику?',opts:['Принимаю','Обсуждаю','Защищаюсь','Обижаюсь']},{q:'Слушаете партнёра?',opts:['Внимательно','Обычно','Отвлекаюсь','Редко']}]},
+      {id:'future',title:'Взгляд в будущее',desc:'Совпадают планы',time:'3 мин',questions:[{q:'Хотите детей?',opts:['Да','Возможно','Не уверен','Нет']},{q:'Где жить?',opts:['Город','Пригород','Деревня','Неважно']},{q:'Важен брак?',opts:['Очень','Да','Не очень','Нет']},{q:'Карьера партнёра?',opts:['Поддерживаю','Да','Нейтрально','Вопросы']}]},
+      {id:'intim',title:'Интимная жизнь',desc:'Ваш секс',time:'3 мин',questions:[{q:'Довольны сексом?',opts:['Очень','Да','Могло лучше','Нет']},{q:'Инициируете близость?',opts:['Часто','Иногда','Редко','Никогда']},{q:'Обсуждаете желания?',opts:['Открыто','Иногда','Редко','Нет']},{q:'Чувствуете себя желанной/ым?',opts:['Всегда','Часто','Иногда','Редко']}]},
+      {id:'passion',title:'Страсть',desc:'Есть ли искра',time:'3 мин',questions:[{q:'Чувствуете бабочек?',opts:['Да!','Иногда','Редко','Нет']},{q:'Думаете о партнёре?',opts:['Постоянно','Часто','Иногда','Редко']},{q:'Спонтанный секс?',opts:['Часто','Иногда','Редко','Нет']},{q:'Целуетесь страстно?',opts:['Да','Иногда','Редко','Нет']}]},
+      {id:'value',title:'Общие ценности',desc:'Что важно',time:'3 мин',questions:[{q:'Карьера или семья?',opts:['Семья','Баланс','Карьера','Зависит']},{q:'Важны традиции?',opts:['Очень','Да','Не очень','Нет']},{q:'Как тратите деньги?',opts:['Коплю','Баланс','Трачу','Не слежу']},{q:'Важна честность?',opts:['Абсолютно','Да','Иногда ложь ок','Зависит']}]},
+      {id:'stress',title:'Стресс и поддержка',desc:'Как справляетесь',time:'3 мин',questions:[{q:'Как снимаете стресс?',opts:['Разговор','Одиночество','Секс','Спорт']},{q:'Партнёр поддерживает?',opts:['Всегда','Часто','Иногда','Редко']},{q:'Делитесь проблемами?',opts:['Всегда','Часто','Редко','Нет']},{q:'Помогаете партнёру?',opts:['Активно','Когда просят','Не знаю как','Редко']}]},
+      {id:'growth',title:'Рост в отношениях',desc:'Развиваетесь ли',time:'3 мин',questions:[{q:'Растёте вместе?',opts:['Да','В основном','Не уверен','Нет']},{q:'Учитесь новому вместе?',opts:['Часто','Иногда','Редко','Нет']},{q:'Ставите цели вместе?',opts:['Да','Иногда','Редко','Нет']},{q:'Вдохновляет партнёр?',opts:['Очень','Да','Иногда','Нет']}]}
     ],
     tips: [
       {icon:'her',cat:'Для неё',title:'G-точка',content:'Находится на передней стенке влагалища, 3-5 см внутри.',steps:['Введите палец ладонью вверх','Согните в форме "иди сюда"','Нащупайте ребристую область','Массируйте с нарастающим давлением']},
-      {icon:'him',cat:'Для него',title:'Уздечка',content:'Самая чувствительная точка на нижней стороне головки.',steps:['Используйте язык или пальцы','Лёгкие движения','Обводите вокруг','Комбинируйте с движениями по стволу']},
-      {icon:'both',cat:'Для обоих',title:'Эджинг',content:'Приближение к оргазму и отступление многократно.',steps:['Доведите до 90% возбуждения','Остановитесь и подождите','Повторите 3-5 раз','Финальный оргазм интенсивнее']}
+      {icon:'her',cat:'Для неё',title:'Клиторальная стимуляция',content:'Клитор — главный источник удовольствия.',steps:['Начните вокруг, не напрямую','Используйте смазку','Круговые или вверх-вниз','Следите за реакцией']},
+      {icon:'her',cat:'Для неё',title:'А-точка',content:'Глубже G-точки, у шейки матки.',steps:['Нужен расслабленный партнёр','Медленное глубокое проникновение','Нежное давление','Очень интенсивные ощущения']},
+      {icon:'him',cat:'Для него',title:'Уздечка',content:'Самая чувствительная точка на нижней стороне головки.',steps:['Используйте язык или пальцы','Лёгкие движения','Обводите вокруг','Комбинируйте с движениями']},
+      {icon:'him',cat:'Для него',title:'Простата',content:'Мужская G-точка для мощных оргазмов.',steps:['Обсудите заранее','Используйте смазку','5-7 см внутрь по передней стенке','Массируйте осторожно']},
+      {icon:'him',cat:'Для него',title:'Яички',content:'Часто забывают, но очень чувствительны.',steps:['Нежно брать в руку','Лёгкий массаж','Можно использовать рот','Осторожно — не сжимать']},
+      {icon:'both',cat:'Для обоих',title:'Эджинг',content:'Приближение к оргазму и остановка.',steps:['Доведите до 90%','Остановитесь','Повторите 3-5 раз','Финальный оргазм интенсивнее']},
+      {icon:'both',cat:'Для обоих',title:'Дыхание',content:'Синхронное дыхание усиливает связь.',steps:['Дышите вместе','Глубоко и медленно','На выдохе расслабление','Смотрите в глаза']},
+      {icon:'both',cat:'Для обоих',title:'Смазка',content:'Правильная смазка меняет всё.',steps:['Водная для презервативов','Силиконовая дольше держится','Не жалейте количества','Добавляйте во время']},
+      {icon:'both',cat:'Для обоих',title:'Темп',content:'Разнообразие темпа важнее скорости.',steps:['Начните медленно','Ускоряйтесь постепенно','Замедляйтесь перед оргазмом','Снова ускоряйтесь']},
+      {icon:'both',cat:'Для обоих',title:'Звуки',content:'Не молчите во время секса.',steps:['Стоны показывают удовольствие','Говорите что нравится','Дышите громче','Это возбуждает обоих']},
+      {icon:'both',cat:'Для обоих',title:'Прелюдия',content:'Минимум 15-20 минут прелюдии.',steps:['Целуйте всё тело','Не торопитесь к гениталиям','Эрогенные зоны: шея, уши, бёдра','Чем дольше тем ярче']},
+      {icon:'her',cat:'Для неё',title:'Оральный для неё',content:'Техника куннилингуса.',steps:['Начните с внутренней стороны бёдер','Дразните вокруг','Плоский язык по всей области','Сфокусируйтесь на клиторе']},
+      {icon:'him',cat:'Для него',title:'Оральный для него',content:'Техника минета.',steps:['Используйте и рот и руку','Не забывайте про яички','Смена темпа и глубины','Контакт глазами']},
+      {icon:'both',cat:'Для обоих',title:'Массаж',content:'Эротический массаж как прелюдия.',steps:['Тёплое масло','Начните со спины','Постепенно к эрогенным зонам','Не торопитесь']},
+      {icon:'both',cat:'Для обоих',title:'Игрушки',content:'Как начать использовать игрушки.',steps:['Обсудите заранее','Начните с простого вибратора','Используйте вместе','Никакой ревности']},
+      {icon:'both',cat:'Для обоих',title:'Ролевые игры',content:'Как попробовать ролевые игры.',steps:['Выберите простой сценарий','Не смущайтесь смеяться','Костюмы необязательны','Главное настрой']},
+      {icon:'both',cat:'Для обоих',title:'После секса',content:'Что делать после важно.',steps:['Обнимайтесь 10-15 минут','Не вскакивайте сразу','Скажите что понравилось','Вода и перекус']},
+      {icon:'her',cat:'Для неё',title:'Множественные оргазмы',content:'Как достичь нескольких оргазмов.',steps:['После первого не останавливайтесь','Снизьте интенсивность немного','Снова наращивайте','Каждый следующий легче']},
+      {icon:'him',cat:'Для него',title:'Контроль эякуляции',content:'Как продлить удовольствие.',steps:['Метод стоп-старт','Сжатие основания','Глубокое дыхание','Думать о другом ненадолго']}
     ],
     ideas: [
-      {cat:'🌹 Романтика',items:['Ужин при свечах','Ванна вдвоём','Массаж с маслом','Танец дома','Завтрак в постель']},
-      {cat:'🔥 Прелюдия',items:['Долгие поцелуи','Эротический массаж','Стриптиз','Душ вместе','Чтение эротики']},
-      {cat:'🎭 Ролевые игры',items:['Незнакомцы в баре','Врач и пациент','Босс и подчинённый','Учитель и студент','Доставщик пиццы']}
+      {cat:'🌹 Романтика',items:['Ужин при свечах','Ванна вдвоём','Массаж с маслом','Танец дома','Завтрак в постель','Пикник в парке','Звёзды на крыше','Письмо любви','Фотосессия вдвоём','Совместная готовка','Закат на природе','Сюрприз цветами','Романтический квест','Вечер без телефонов','Воспоминания в альбоме']},
+      {cat:'🔥 Прелюдия',items:['Долгие поцелуи','Эротический массаж','Стриптиз','Душ вместе','Чтение эротики','Переписка днём','Игра на раздевание','Фото для партнёра','Танец на коленях','Медленное раздевание','Завязать глаза','Кубики льда','Перья','Шоколад и клубника','Шёпот на ухо']},
+      {cat:'🎭 Ролевые игры',items:['Незнакомцы в баре','Врач и пациент','Босс и секретарь','Учитель и студент','Доставщик','Полицейский','Массажист','Фотограф и модель','Спасатель','Вор и жертва','Знаменитость и фанат','Сосед/ка','Бывшие','Первое свидание заново','Свадебная ночь заново']},
+      {cat:'📍 Места',items:['Кухонный стол','Диван','Балкон ночью','Машина','Природа','Примерочная','Лифт','Крыша','Офис','Ванная','Бассейн','Пляж','Гостиница','Палатка','Джакузи']},
+      {cat:'⏰ Время',items:['Утренний секс','Обеденный перерыв','Перед работой','После тренировки','Ночью без света','На рассвете','Во время грозы','По будильнику ночью','После прихода домой','Ленивое воскресенье','Перед важным событием','После долгой разлуки','В отпуске каждый день','Спонтанно днём','Под бой курантов']},
+      {cat:'🎲 Игры',items:['Правда или действие 18+','Карты на раздевание','Кости желаний','Секс-рулетка','Фанты','Квест по дому','Найди эрогенные зоны','Кто дольше продержится','Имитация порно','Секс-марафон','Новая поза каждый день','Неделя экспериментов','Запретные слова','Только руками','Только ртом']},
+      {cat:'👗 Образы',items:['Красное бельё','Чулки и подвязки','Только рубашка','Фартук на голое тело','Корсет','Комплект его/её белья','Шёлковый халат','Костюм горничной','Костюм медсестры','Кожа','Латекс','Прозрачное платье','Костюм школьницы','Галстук на голое тело','Только туфли на каблуках']}
     ],
     pregnancyInfo: {
       weeks: [
-        {week:4,size:'🌰',sizeName:'Маковое зерно',dev:'Эмбрион имплантируется',tips:['Начните приём фолиевой кислоты','Откажитесь от алкоголя']},
-        {week:8,size:'🫐',sizeName:'Малина',dev:'Формируются все органы',tips:['Первый визит к врачу','Сдайте анализы']},
-        {week:12,size:'🍋',sizeName:'Лайм',dev:'Риск выкидыша снижается',tips:['Можно рассказать близким','Скрининг первого триместра']},
-        {week:20,size:'🍌',sizeName:'Банан',dev:'Малыш шевелится',tips:['Анатомическое УЗИ','Подготовьте комнату']},
-        {week:40,size:'🍉',sizeName:'Арбуз',dev:'Готов к рождению',tips:['Ждите схваток','Всё готово!']}
+        {week:1,size:'•',sizeName:'Точка',dev:'Зачатие',tips:['Начните фолиевую кислоту']},
+        {week:4,size:'🌰',sizeName:'Маковое зерно',dev:'Имплантация',tips:['Тест положительный','Откажитесь от алкоголя']},
+        {week:8,size:'🫐',sizeName:'Малина',dev:'Бьётся сердце',tips:['Первый визит к врачу']},
+        {week:12,size:'🍋',sizeName:'Лайм',dev:'Органы сформированы',tips:['Первый скрининг']},
+        {week:16,size:'🥑',sizeName:'Авокадо',dev:'Слышит звуки',tips:['Можно узнать пол']},
+        {week:20,size:'🍌',sizeName:'Банан',dev:'Шевелится',tips:['Анатомическое УЗИ']},
+        {week:24,size:'🌽',sizeName:'Кукуруза',dev:'Лёгкие развиваются',tips:['Жизнеспособен']},
+        {week:28,size:'🍆',sizeName:'Баклажан',dev:'Видит сны',tips:['Контроль каждые 2 недели']},
+        {week:32,size:'🥥',sizeName:'Кокос',dev:'Переворачивается',tips:['Сумка в роддом']},
+        {week:36,size:'🍈',sizeName:'Дыня',dev:'Почти готов',tips:['Каждую неделю к врачу']},
+        {week:40,size:'🍉',sizeName:'Арбуз',dev:'Срок родов!',tips:['Ждите схватки']}
       ],
-      checklist: {
-        trimester1:['Тест на беременность','Запись к гинекологу','Анализы','УЗИ подтверждение','Фолиевая кислота'],
-        trimester2:['Скрининг','Анатомическое УЗИ','Определение пола','Одежда для беременных'],
-        trimester3:['Выбор роддома','Сумка в роддом','Детская комната','Автокресло'],
-        hospital:['Документы','Одежда для мамы','Одежда для малыша','Подгузники']
-      },
-      cycleInfo: {
-        phases: [
-          {name:'Менструация',days:'1-5',desc:'Отторжение эндометрия'},
-          {name:'Фолликулярная',days:'6-14',desc:'Созревание яйцеклетки'},
-          {name:'Овуляция',days:'14-16',desc:'Выход яйцеклетки'},
-          {name:'Лютеиновая',days:'17-28',desc:'Подготовка к имплантации'}
-        ],
-        fertileDays:'5 дней до овуляции и день овуляции',
-        signs:['Повышение базальной температуры','Изменение слизи','Боль внизу живота']
-      }
+      checklist:{trimester1:['Тест','Врач','Анализы','УЗИ','Фолиевая кислота','Без алкоголя'],trimester2:['Скрининг','Генетика','УЗИ пол','Одежда беременной'],trimester3:['Роддом','Сумка','Комната','Автокресло','Коляска'],hospital:['Паспорт','Полис','Обменная карта','Халат','Вещи малышу']},
+      cycleInfo:{phases:[{name:'Менструация',days:'1-5',desc:'Отторжение эндометрия'},{name:'Фолликулярная',days:'6-14',desc:'Созревание яйцеклетки'},{name:'Овуляция',days:'14-16',desc:'Выход яйцеклетки'},{name:'Лютеиновая',days:'17-28',desc:'Подготовка к имплантации'}],fertileDays:'5 дней до овуляции и день овуляции',signs:['Повышение температуры','Изменение слизи','Боль внизу живота','Повышенное либидо']}
     }
   });
 });
 
-app.listen(PORT, () => console.log(`Explore API running on port ${PORT}`));
+// === XP & LEVELS ===
+function addXP(userId, amount) {
+  if (!data.users[userId]) return;
+  data.users[userId].xp = (data.users[userId].xp || 0) + amount;
+  const newLevel = Math.floor(data.users[userId].xp / 100) + 1;
+  if (newLevel > (data.users[userId].level || 1)) {
+    data.users[userId].level = newLevel;
+    data.users[userId].coins = (data.users[userId].coins || 0) + 50;
+  }
+  saveData();
+}
+
+app.post('/api/user/:id/xp', (req, res) => {
+  addXP(req.params.id, req.body.amount || 10);
+  res.json({ success: true, user: data.users[req.params.id] });
+});
+
+// === STREAKS ===
+function updateStreak(coupleId) {
+  if (!data.streaks) data.streaks = {};
+  if (!data.streaks[coupleId]) data.streaks[coupleId] = { current: 0, best: 0, lastDate: null };
+  const today = new Date().toISOString().split('T')[0];
+  const last = data.streaks[coupleId].lastDate;
+  if (last === today) return;
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  if (last === yesterday) { data.streaks[coupleId].current++; } else { data.streaks[coupleId].current = 1; }
+  if (data.streaks[coupleId].current > data.streaks[coupleId].best) data.streaks[coupleId].best = data.streaks[coupleId].current;
+  data.streaks[coupleId].lastDate = today;
+  saveData();
+}
+
+app.get('/api/couple/:coupleId/streak', (req, res) => {
+  if (!data.streaks) data.streaks = {};
+  res.json(data.streaks[req.params.coupleId] || { current: 0, best: 0 });
+});
+
+// === SECRETS ===
+app.get('/api/couple/:coupleId/secrets', (req, res) => {
+  if (!data.secrets) data.secrets = {};
+  res.json(data.secrets[req.params.coupleId] || { partner1: [], partner2: [], revealed: [] });
+});
+
+app.post('/api/couple/:coupleId/secrets', (req, res) => {
+  const { secret, isPartner1, category } = req.body;
+  if (!data.secrets) data.secrets = {};
+  if (!data.secrets[req.params.coupleId]) data.secrets[req.params.coupleId] = { partner1: [], partner2: [], revealed: [] };
+  const key = isPartner1 ? 'partner1' : 'partner2';
+  data.secrets[req.params.coupleId][key].push({ id: Date.now(), secret, category: category || 'fantasy', added: new Date().toISOString() });
+  saveData();
+  res.json({ success: true });
+});
+
+app.post('/api/couple/:coupleId/secrets/reveal', (req, res) => {
+  if (!data.secrets) data.secrets = {};
+  const secrets = data.secrets[req.params.coupleId];
+  if (!secrets) return res.json({ success: false, error: 'No secrets' });
+  const p1 = secrets.partner1.filter(s => !secrets.revealed.includes(s.id));
+  const p2 = secrets.partner2.filter(s => !secrets.revealed.includes(s.id));
+  if (p1.length === 0 || p2.length === 0) return res.json({ success: false, error: 'Need secrets from both' });
+  const s1 = p1[Math.floor(Math.random() * p1.length)];
+  const s2 = p2[Math.floor(Math.random() * p2.length)];
+  secrets.revealed.push(s1.id, s2.id);
+  saveData();
+  res.json({ success: true, secrets: [s1, s2] });
+});
+
+// === VIRTUAL GIFTS ===
+const VIRTUAL_GIFTS = [
+  { id: 1, name: 'Роза', icon: '🌹', cost: 10 },
+  { id: 2, name: 'Шоколад', icon: '🍫', cost: 15 },
+  { id: 3, name: 'Сердце', icon: '❤️', cost: 20 },
+  { id: 4, name: 'Мишка', icon: '🧸', cost: 30 },
+  { id: 5, name: 'Кольцо', icon: '💍', cost: 50 },
+  { id: 6, name: 'Букет', icon: '💐', cost: 25 },
+  { id: 7, name: 'Поцелуй', icon: '💋', cost: 5 },
+  { id: 8, name: 'Корона', icon: '👑', cost: 100 }
+];
+
+app.get('/api/gifts', (req, res) => res.json(VIRTUAL_GIFTS));
+
+app.get('/api/couple/:coupleId/gifts', (req, res) => {
+  if (!data.gifts) data.gifts = {};
+  res.json(data.gifts[req.params.coupleId] || []);
+});
+
+app.post('/api/couple/:coupleId/gifts', (req, res) => {
+  const { giftId, from, to, message } = req.body;
+  const gift = VIRTUAL_GIFTS.find(g => g.id == giftId);
+  if (!gift) return res.json({ success: false, error: 'Gift not found' });
+  const user = data.users[from];
+  if (!user || (user.coins || 0) < gift.cost) return res.json({ success: false, error: 'Not enough coins' });
+  user.coins -= gift.cost;
+  if (!data.gifts) data.gifts = {};
+  if (!data.gifts[req.params.coupleId]) data.gifts[req.params.coupleId] = [];
+  data.gifts[req.params.coupleId].push({ id: Date.now(), giftId, from, to, message, gift: gift.name, icon: gift.icon, time: new Date().toISOString() });
+  saveData();
+  res.json({ success: true, gifts: data.gifts[req.params.coupleId], user });
+});
+
+// === GAMES ===
+const TRUTH_OR_DARE = {
+  truth: ['Какая твоя самая смелая фантазия?','Где самое необычное место где хотел бы близости?','Что тебя больше всего возбуждает во мне?','Какой секрет ты никогда не рассказывал?','О чём ты думаешь когда скучаешь по мне?','Что бы ты хотел чтобы я делал чаще?','Какой наш момент был самым страстным?','Что ты чувствуешь когда я тебя целую?','Есть ли что-то что ты хочешь попробовать?','Что тебе снилось обо мне?'],
+  dare: ['Поцелуй меня 10 секунд','Сделай мне массаж 5 минут','Станцуй для меня','Прошепчи что-то на ухо','Покажи своё любимое место для поцелуев','Обними меня и не отпускай минуту','Сделай комплимент моему телу','Поцелуй меня куда захочешь','Расскажи что хочешь сделать со мной','Сними один предмет одежды']
+};
+
+const WOULD_YOU_RATHER = [
+  { a: 'Секс на пляже', b: 'Секс в горах' },
+  { a: 'Быть сверху', b: 'Быть снизу' },
+  { a: 'Утренний секс', b: 'Ночной секс' },
+  { a: 'Медленно и нежно', b: 'Быстро и страстно' },
+  { a: 'Глаза завязаны', b: 'Руки связаны' },
+  { a: 'В душе', b: 'В ванной' },
+  { a: 'С музыкой', b: 'В тишине' },
+  { a: 'При свечах', b: 'В темноте' },
+  { a: 'Ролевая игра', b: 'Игрушки' },
+  { a: 'Долгая прелюдия', b: 'Сразу к делу' }
+];
+
+app.get('/api/games/truth-or-dare', (req, res) => {
+  const type = req.query.type || (Math.random() > 0.5 ? 'truth' : 'dare');
+  const items = TRUTH_OR_DARE[type];
+  res.json({ type, item: items[Math.floor(Math.random() * items.length)] });
+});
+
+app.get('/api/games/would-you-rather', (req, res) => {
+  res.json(WOULD_YOU_RATHER[Math.floor(Math.random() * WOULD_YOU_RATHER.length)]);
+});
+
+app.get('/api/games/spin', (req, res) => {
+  const items = {
+    position: ['Миссионерская','Наездница','Догги','Ложки','69','Лотос','Стоя','Бабочка'],
+    action: ['Поцелуй','Массаж','Стриптиз','Комплимент','Объятие','Танец','Кубики льда','Шёпот'],
+    place: ['Кровать','Диван','Кухня','Ванная','Балкон','Пол','Стол','Стена'],
+    time: ['5 минут','10 минут','15 минут','20 минут','30 минут','До финала']
+  };
+  const cats = Object.keys(items);
+  const cat = req.query.category || cats[Math.floor(Math.random() * cats.length)];
+  const list = items[cat] || items.position;
+  res.json({ category: cat, item: list[Math.floor(Math.random() * list.length)] });
+});
+
+// === LEADERBOARD ===
+app.get('/api/leaderboard', (req, res) => {
+  const users = Object.values(data.users).map(u => ({ id: u.id, name: u.name, xp: u.xp || 0, level: u.level || 1 })).sort((a, b) => b.xp - a.xp);
+  res.json(users.slice(0, 20));
+});
+
+// === PREMIUM ===
+app.get('/api/user/:id/premium', (req, res) => {
+  if (!data.premium) data.premium = {};
+  res.json(data.premium[req.params.id] || { active: false });
+});
+
+app.post('/api/user/:id/premium/activate', (req, res) => {
+  if (!data.premium) data.premium = {};
+  data.premium[req.params.id] = { active: true, plan: req.body.plan || 'monthly', activatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() };
+  saveData();
+  res.json({ success: true, premium: data.premium[req.params.id] });
+});
+
+// === CALENDAR WITH STATS ===
+app.post('/api/couple/:coupleId/intimate', (req, res) => {
+  const { date, position, duration, rating, notes, odUserId } = req.body;
+  if (!data.stats[req.params.coupleId]) data.stats[req.params.coupleId] = { intimate: [], positions: {}, tests: {} };
+  data.stats[req.params.coupleId].intimate.push({ id: Date.now(), date: date || new Date().toISOString(), position, duration, rating, notes });
+  if (position) data.stats[req.params.coupleId].positions[position] = (data.stats[req.params.coupleId].positions[position] || 0) + 1;
+  updateStreak(req.params.coupleId);
+  if (odUserId) addXP(odUserId, 20);
+  saveData();
+  res.json({ success: true, stats: data.stats[req.params.coupleId] });
+});
+
+app.listen(PORT, () => console.log('Explore API v7 running on port ' + PORT));
